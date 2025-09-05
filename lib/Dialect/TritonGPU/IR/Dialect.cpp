@@ -2141,9 +2141,6 @@ SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
                                            ctaLayout);
   }
 
-  // max vectorization size for ds_load is 128 bits
-  int vectorSize = std::min(kWidth * elemBitWidth, 128u) / elemBitWidth;
-
   const int numBanks = 32;
   const int bankBitWidth = 32;
 
@@ -2156,8 +2153,13 @@ SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
   // This represents the max number of rows that can be accessed
   // at the same time
   int mDim = getMNKDimPerInstr()[0];
-  int maxPhase =
-      std::max(std::min(mDim / perPhase, innerDimLength / vectorSize), 1);
+  // assuming all the mDim threads can be issued at the mean time
+  // rather than filled vectorsize in the ds_load_b128 fully
+  unsigned maxVectorSize = std::max(1, elemsPerOneBanksRow / mDim);
+  int vectorSize = std::min(kWidth, maxVectorSize);
+
+  int maxThread = std::max(1, elemsPerOneBanksRow / vectorSize);
+  int maxPhase = std::max(std::min(mDim / perPhase, maxThread / perPhase), 1);
 
   return SwizzledSharedEncodingAttr::get(getContext(), vectorSize, perPhase,
                                          maxPhase, sharedOrder, ctaLayout);
