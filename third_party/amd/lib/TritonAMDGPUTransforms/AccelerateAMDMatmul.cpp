@@ -132,7 +132,51 @@ warpsPerTileMFMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
 SmallVector<unsigned, 3>
 warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
                  std::pair<int64_t, int64_t> shapePerWarp) {
-  return warpsPerTile(dotOp, shape, numWarps, shapePerWarp);
+auto ttDotOp = cast<tt::DotOpInterface>(dotOp);
+  if(shape.size() == 3 || isChainDotHead(ttDotOp) || isChainDotTail(ttDotOp))
+    return warpsPerTile(dotOp, shape, numWarps, shapePerWarp);
+
+  auto mDim = shapePerWarp.first;
+  auto nDim = shapePerWarp.second;
+  int64_t M = shape[shape.size() - 2];
+  int64_t N = shape.back();
+
+  auto getReps = [&](SmallVector<unsigned, 3> ret) {
+    return SmallVector<int64_t, 3>{
+      ceil(M, mDim * ret[0]), 
+      ceil(N, nDim * ret[1])};
+  };
+
+  SmallVector<unsigned, 3> ret = {1, 1};
+  SmallVector<int64_t> capMN = getReps(ret);
+  // Registers Pressure Driven balance heuristic
+  while(product(ret) < numWarps) {
+    auto reps = getReps(ret);
+
+    bool growMN = reps[0] > reps[1];
+    bool canGrowM = (ret[0] < capMN[0]) && (reps[0] > 1) && growMN;
+    bool canGrowN = (ret[1] < capMN[1]) && (reps[1] > 1) && !growMN;
+
+    if(!canGrowM && !canGrowN){
+      // allocate the remaining warps to balance repsM and repsN
+      if(ret[0] <= ret[1])
+        ret[0] *= 2;
+      else
+        ret[1] *= 2;
+    }
+
+    if(canGrowM) {
+      ret[0] *= 2;
+      continue;
+    }
+
+    if(canGrowN) {
+      ret[1] *= 2;
+      continue;
+    }
+  }
+
+  return ret;
 }
 
 // Chooses a proper MFMA instruction that can used to compute the given dot op.
